@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>TTS Studio – Video Editor Helper</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:0; background:#0b1220; color:#e5e7eb; }
+    .wrap { max-width: 980px; margin: 32px auto; padding: 20px; background:#0f172a; border:1px solid #1f2937; border-radius:14px; }
+    h1 { margin:0 0 6px; }
+    .sub { color:#9ca3af; margin:0 0 16px; }
+    .grid { display:grid; grid-template-columns: repeat(4, minmax(180px,1fr)); gap:12px; }
+    label { font-size:12px; color:#9ca3af; display:block; margin-bottom:6px; }
+    select, input[type="number"], textarea {
+      width:100%; background:#0b1220; color:#e5e7eb; border:1px solid #334155; border-radius:10px; padding:10px; font-size:14px; outline:none;
+    }
+    textarea { min-height:140px; resize:vertical; grid-column:1 / -1; }
+    .row { display:flex; gap:10px; align-items:center; margin-top:12px; flex-wrap:wrap; }
+    button { border:none; border-radius:10px; padding:12px 16px; font-weight:600; cursor:pointer; background:linear-gradient(180deg,#3b82f6,#2563eb); color:#fff; box-shadow:0 8px 24px rgba(59,130,246,.35); }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    audio { width:100%; margin-top:12px; }
+    .note { color:#9ca3af; font-size:13px; }
+    .error { color:#fca5a5; margin-top:8px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>TTS Studio</h1>
+    <p class="sub">Multilingual, multi‑voice speech with Gender, Accent, Speed, and Exaggeration controls.</p>
+
+    <div class="grid">
+      <div>
+        <label for="provider">Provider</label>
+        <select id="provider"></select>
+      </div>
+      <div>
+        <label for="voice">Voice</label>
+        <select id="voice"></select>
+      </div>
+      <div>
+        <label for="language">Language</label>
+        <select id="language"></select>
+      </div>
+      <div>
+        <label for="gender">Gender</label>
+        <select id="gender"></select>
+      </div>
+      <div>
+        <label for="accent">Accent</label>
+        <select id="accent"></select>
+      </div>
+      <div>
+        <label for="speed">Speed (%): -50 to +50</label>
+        <input id="speed" type="number" min="-50" max="50" step="5" value="0"/>
+      </div>
+      <div>
+        <label for="exaggeration">Exaggeration (0–100)</label>
+        <input id="exaggeration" type="number" min="0" max="100" step="5" value="0"/>
+      </div>
+
+      <textarea id="prompt" placeholder="Paste script here… or type a line in any language."></textarea>
+    </div>
+
+    <div class="row">
+      <button id="go">Generate Audio</button>
+      <a id="download" href="#" download="output.mp3" style="display:none;">Download</a>
+      <span id="status" class="note"></span>
+    </div>
+
+    <audio id="player" controls style="display:none;"></audio>
+    <div id="error" class="error" style="display:none;"></div>
+  </div>
+
+  <script>
+    const selProvider = document.getElementById("provider");
+    const selVoice = document.getElementById("voice");
+    const selLang = document.getElementById("language");
+    const selGender = document.getElementById("gender");
+    const selAccent = document.getElementById("accent");
+    const inpSpeed = document.getElementById("speed");
+    const inpExag = document.getElementById("exaggeration");
+    const txt = document.getElementById("prompt");
+    const btn = document.getElementById("go");
+    const player = document.getElementById("player");
+    const download = document.getElementById("download");
+    const statusEl = document.getElementById("status");
+    const errEl = document.getElementById("error");
+
+    let meta = null;
+
+    async function loadMeta() {
+      const r = await fetch("/providers");
+      meta = await r.json();
+
+      // provider
+      selProvider.innerHTML = "";
+      (meta.providers || []).forEach(p => {
+        const o = document.createElement("option");
+        o.value = p.id; o.textContent = p.name;
+        selProvider.appendChild(o);
+      });
+      selProvider.value = meta.default_provider || (meta.providers?.[0]?.id ?? "");
+
+      // gender options
+      selGender.innerHTML = "";
+      (meta.gender_options || ["auto","male","female","neutral"]).forEach(g => {
+        const o = document.createElement("option");
+        o.value = g; o.textContent = g[0].toUpperCase() + g.slice(1);
+        selGender.appendChild(o);
+      });
+
+      // accent options (now includes Italian, Filipino, Arabic, Asian, Russian)
+      selAccent.innerHTML = "";
+      (meta.accent_options || ["auto"]).forEach(a => {
+        const label = a[0].toUpperCase() + a.slice(1);
+        const o = document.createElement("option");
+        o.value = a; o.textContent = label;
+        selAccent.appendChild(o);
+      });
+
+      updateVoiceLang();
+    }
+
+    function updateVoiceLang() {
+      const prov = (meta.providers || []).find(p => p.id === selProvider.value);
+      // voices
+      selVoice.innerHTML = "";
+      const vAuto = document.createElement("option");
+      vAuto.value = "auto"; vAuto.textContent = "Auto (based on Gender+Accent)";
+      selVoice.appendChild(vAuto);
+      (prov?.voices || []).forEach(v => {
+        const o = document.createElement("option");
+        o.value = v.id; o.textContent = v.label;
+        selVoice.appendChild(o);
+      });
+      // languages
+      selLang.innerHTML = "";
+      (prov?.languages || []).forEach(code => {
+        const o = document.createElement("option");
+        o.value = code; o.textContent = code;
+        selLang.appendChild(o);
+      });
+      if ((prov?.languages || []).includes("auto")) selLang.value = "auto";
+    }
+
+    selProvider.addEventListener("change", updateVoiceLang);
+
+    async function generate() {
+      const prompt = (txt.value || "").trim();
+      if (!prompt) return showErr("Please enter text.");
+
+      btn.disabled = true;
+      statusEl.textContent = "Generating…";
+      errEl.style.display = "none";
+      player.style.display = "none";
+      download.style.display = "none";
+
+      try {
+        const body = {
+          provider: selProvider.value,
+          voice: selVoice.value,
+          language: selLang.value,
+          prompt,
+          gender: selGender.value,
+          accent: selAccent.value,
+          exaggeration: parseInt(inpExag.value || "0", 10),
+          speed: parseInt(inpSpeed.value || "0", 10)
+        };
+
+        const resp = await fetch("/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({error:"Request failed"}));
+          throw new Error(e.error || "Generation failed");
+        }
+
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        player.src = url; player.style.display = "block";
+        download.href = url; download.style.display = "inline-block";
+        statusEl.textContent = "Done";
+      } catch (e) {
+        showErr(e.message || String(e));
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function showErr(m) {
+      errEl.textContent = "Error: " + m;
+      errEl.style.display = "block";
+      statusEl.textContent = "";
+    }
+
+    document.getElementById("go").addEventListener("click", generate);
+    loadMeta();
+  </script>
+</body>
+</html>
