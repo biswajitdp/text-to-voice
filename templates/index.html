@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>TTS Studio – Video Editor Helper</title>
+  <title>TTS Studio – Natural Voice Generator</title>
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:0; background:#0b1220; color:#e5e7eb; }
     .wrap { max-width: 980px; margin: 32px auto; padding: 20px; background:#0f172a; border:1px solid #1f2937; border-radius:14px; }
@@ -21,43 +21,71 @@
     audio { width:100%; margin-top:12px; }
     .note { color:#9ca3af; font-size:13px; }
     .error { color:#fca5a5; margin-top:8px; }
+    #state-section { display: none; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>TTS Studio</h1>
-    <p class="sub">Multilingual, multi‑voice speech with Gender, Accent, Speed, and Exaggeration controls.</p>
+    <p class="sub">Natural, multilingual speech with precise accent, gender, speed, and expression controls.</p>
 
     <div class="grid">
       <div>
         <label for="provider">Provider</label>
-        <select id="provider"></select>
+        <select id="provider">
+          <option value="gtts">Google gTTS</option>
+        </select>
       </div>
       <div>
         <label for="voice">Voice</label>
-        <select id="voice"></select>
+        <select id="voice">
+          <option value="auto">Auto (Gender+Accent)</option>
+        </select>
       </div>
       <div>
         <label for="language">Language</label>
-        <select id="language"></select>
+        <select id="language">
+          <option value="en">en</option>
+        </select>
       </div>
       <div>
         <label for="gender">Gender</label>
-        <select id="gender"></select>
+        <select id="gender">
+          <option value="auto">Auto</option>
+          <option value="male">Male</option>
+          <option value="female">Female</option>
+          <option value="neutral">Neutral</option>
+        </select>
       </div>
       <div>
         <label for="accent">Accent</label>
-        <select id="accent"></select>
+        <select id="accent">
+          <option value="auto">Auto</option>
+          <option value="american">American</option>
+          <option value="british">British</option>
+          <option value="indian">Indian</option>
+          <option value="australian">Australian</option>
+          <option value="italian">Italian</option>
+          <option value="filipino">Filipino</option>
+          <option value="arabic">Arabic</option>
+          <option value="asian">Asian</option>
+          <option value="russian">Russian</option>
+        </select>
+      </div>
+      <div id="state-section">
+        <label for="state">Indian State Accent</label>
+        <select id="state">
+          <option value="">Select State</option>
+        </select>
       </div>
       <div>
-        <label for="speed">Speed (%): -50 to +50</label>
-        <input id="speed" type="number" min="-50" max="50" step="5" value="0"/>
+        <label for="speed">Speed (%): -100 to +100</label>
+        <input id="speed" type="number" min="-100" max="100" step="5" value="0"/>
       </div>
       <div>
-        <label for="exaggeration">Exaggeration (0–100)</label>
+        <label for="exaggeration">Expression (0–100)</label>
         <input id="exaggeration" type="number" min="0" max="100" step="5" value="0"/>
       </div>
-
       <textarea id="prompt" placeholder="Paste script here… or type a line in any language."></textarea>
     </div>
 
@@ -77,6 +105,8 @@
     const selLang = document.getElementById("language");
     const selGender = document.getElementById("gender");
     const selAccent = document.getElementById("accent");
+    const selState = document.getElementById("state");
+    const stateSection = document.getElementById("state-section");
     const inpSpeed = document.getElementById("speed");
     const inpExag = document.getElementById("exaggeration");
     const txt = document.getElementById("prompt");
@@ -89,65 +119,81 @@
     let meta = null;
 
     async function loadMeta() {
-      const r = await fetch("/providers");
-      meta = await r.json();
+      try {
+        const r = await fetch("/providers");
+        if (!r.ok) {
+          const err = await r.text();
+          throw new Error(`Providers request failed: ${err}`);
+        }
+        meta = await r.json();
+        selProvider.innerHTML = "";
+        (meta.providers || []).forEach(p => {
+          const o = document.createElement("option");
+          o.value = p.id; o.textContent = p.name;
+          selProvider.appendChild(o);
+        });
+        selProvider.value = meta.default_provider || "gtts";
 
-      // provider
-      selProvider.innerHTML = "";
-      (meta.providers || []).forEach(p => {
-        const o = document.createElement("option");
-        o.value = p.id; o.textContent = p.name;
-        selProvider.appendChild(o);
-      });
-      selProvider.value = meta.default_provider || (meta.providers?.[0]?.id ?? "");
+        selGender.innerHTML = "";
+        (meta.gender_options || ["auto", "male", "female", "neutral"]).forEach(g => {
+          const o = document.createElement("option");
+          o.value = g; o.textContent = g[0].toUpperCase() + g.slice(1);
+          selGender.appendChild(o);
+        });
 
-      // gender options
-      selGender.innerHTML = "";
-      (meta.gender_options || ["auto","male","female","neutral"]).forEach(g => {
-        const o = document.createElement("option");
-        o.value = g; o.textContent = g[0].toUpperCase() + g.slice(1);
-        selGender.appendChild(o);
-      });
+        selAccent.innerHTML = "";
+        (meta.accent_options || ["auto"]).forEach(a => {
+          const o = document.createElement("option");
+          o.value = a; o.textContent = a[0].toUpperCase() + a.slice(1);
+          selAccent.appendChild(o);
+        });
 
-      // accent options (now includes Italian, Filipino, Arabic, Asian, Russian)
-      selAccent.innerHTML = "";
-      (meta.accent_options || ["auto"]).forEach(a => {
-        const label = a[0].toUpperCase() + a.slice(1);
-        const o = document.createElement("option");
-        o.value = a; o.textContent = label;
-        selAccent.appendChild(o);
-      });
+        selState.innerHTML = "<option value=\"\">Select State</option>";
+        (meta.indian_states || []).forEach(s => {
+          const o = document.createElement("option");
+          o.value = s.id; o.textContent = s.label;
+          selState.appendChild(o);
+        });
 
-      updateVoiceLang();
+        updateVoiceLang();
+        updateStateVisibility();
+      } catch (e) {
+        console.error("Load meta error:", e);
+        showErr(`Failed to initialize UI: ${e.message}`);
+      }
     }
 
     function updateVoiceLang() {
-      const prov = (meta.providers || []).find(p => p.id === selProvider.value);
-      // voices
+      const prov = (meta?.providers || []).find(p => p.id === selProvider.value) || { voices: [], languages: [] };
       selVoice.innerHTML = "";
       const vAuto = document.createElement("option");
-      vAuto.value = "auto"; vAuto.textContent = "Auto (based on Gender+Accent)";
+      vAuto.value = "auto"; vAuto.textContent = "Auto (Gender+Accent)";
       selVoice.appendChild(vAuto);
-      (prov?.voices || []).forEach(v => {
+      (prov.voices || []).forEach(v => {
         const o = document.createElement("option");
         o.value = v.id; o.textContent = v.label;
         selVoice.appendChild(o);
       });
-      // languages
       selLang.innerHTML = "";
-      (prov?.languages || []).forEach(code => {
+      (prov.languages || []).forEach(code => {
         const o = document.createElement("option");
         o.value = code; o.textContent = code;
         selLang.appendChild(o);
       });
-      if ((prov?.languages || []).includes("auto")) selLang.value = "auto";
+      if ((prov.languages || []).includes("auto")) selLang.value = "auto";
+    }
+
+    function updateStateVisibility() {
+      stateSection.style.display = selAccent.value === "indian" ? "block" : "none";
     }
 
     selProvider.addEventListener("change", updateVoiceLang);
+    selAccent.addEventListener("change", updateStateVisibility);
 
     async function generate() {
       const prompt = (txt.value || "").trim();
       if (!prompt) return showErr("Please enter text.");
+      if (selAccent.value === "indian" && !selState.value) return showErr("Please select an Indian state for Indian accent.");
 
       btn.disabled = true;
       statusEl.textContent = "Generating…";
@@ -163,6 +209,7 @@
           prompt,
           gender: selGender.value,
           accent: selAccent.value,
+          state: selState.value,
           exaggeration: parseInt(inpExag.value || "0", 10),
           speed: parseInt(inpSpeed.value || "0", 10)
         };
@@ -174,7 +221,7 @@
         });
 
         if (!resp.ok) {
-          const e = await resp.json().catch(() => ({error:"Request failed"}));
+          const e = await resp.json().catch(() => ({ error: "Request failed" }));
           throw new Error(e.error || "Generation failed");
         }
 
@@ -184,6 +231,7 @@
         download.href = url; download.style.display = "inline-block";
         statusEl.textContent = "Done";
       } catch (e) {
+        console.error("Generate error:", e);
         showErr(e.message || String(e));
       } finally {
         btn.disabled = false;
@@ -196,7 +244,7 @@
       statusEl.textContent = "";
     }
 
-    document.getElementById("go").addEventListener("click", generate);
+    btn.addEventListener("click", generate);
     loadMeta();
   </script>
 </body>
